@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from openai import OpenAI
-
 from .config import Settings, DATA_DIR, LOGS_DIR
 from .faq import load_faq, find_top_faq_matches, build_faq_context
 from .orders import load_orders, get_order, build_order_context
-from .session import SessionState
-from .llm import ChatModel
+from .session import SessionState, JsonlLogger
+from .llm import build_chain
 
 
 def run_bot():
@@ -25,12 +23,14 @@ def run_bot():
         session_id=session_id,
         brand=settings.brand_name,
         model=settings.openai_model,
-        log_path=log_path,
+        logger=JsonlLogger(log_path),
     )
     state.init_meta()
 
-    client = OpenAI(api_key=settings.openai_api_key)
-    model = ChatModel(client, settings.openai_model, settings.brand_name)
+    chain_with_history, _ = build_chain(
+        model_name=settings.openai_model,
+        brand=settings.brand_name,
+    )
 
     print(f"{settings.brand_name} support bot. /order <id>, /exit для выхода.")
 
@@ -49,9 +49,6 @@ def run_bot():
             state.log_event("user", user_input)
             state.log_event("assistant", "Хорошего дня!", extra={"note": "session_end"})
             break
-
-        state.log_event("user", user_input)
-        state.add_history("user", user_input)
 
         # /order
         if user_input.startswith("/order"):
@@ -75,20 +72,36 @@ def run_bot():
 
         # RAG по FAQ
         matches = find_top_faq_matches(user_input, faq_items)
-        faq_context = build_faq_context(matches)
+        full_ctx = build_faq_context(matches)
+        if state.last_order_context:
+            full_ctx += "\n\n" + state.last_order_context
 
-        reply, usage = model.reply(
-            user_message=user_input,
-            faq_context=faq_context,
-            order_context=state.last_order_context,
-            history=state.history,
-        )
+        try:
+            response = chain_with_history.invoke(
+                {"question": user_input, "context": full_ctx},
+                {"configurable": {"session_id": state.session_id}},
+            )
 
-        print(f"Бот: {reply}")
+            reply = response.content.strip()
+            usage_meta = getattr(response, "usage_metadata", None)
+            usage = None
+            if usage_meta:
+                usage = {
+                    "prompt_tokens": usage_meta.get("prompt_tokens", 0),
+                    "completion_tokens": usage_meta.get("completion_tokens", 0),
+                    "total_tokens": usage_meta.get("total_tokens", 0),
+                }
+                state.log_usage_step(usage)
 
-        state.log_event("assistant", reply, usage=usage, extra={"source": "faq" if matches else "no_faq"})
-        state.log_usage_step(usage)
-        state.add_history("assistant", reply)
+            print(f"Бот: {reply}")
+            state.log_event("assistant", reply, usage=usage, source="faq" if matches else "no_faq")
+            state.add_history("assistant", reply)
+
+        except Exception as e:
+            err_text = f"Ошибка LLM: {e}"
+            state.log_event("assistant", err_text, source="error")
+            state.add_history("assistant", err_text)
+            continue
 
     # итоговая сводка по usage
     state.log_usage_summary()

@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
+from typing import Dict
 
-from openai import OpenAI
+from langchain_core.chat_history import InMemoryChatMessageHistory
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_openai import ChatOpenAI
 
 SYSTEM_TEMPLATE = """
 Ты консольный бот поддержки магазина {brand}.
@@ -17,39 +20,34 @@ SYSTEM_TEMPLATE = """
 """.strip()
 
 
-class ChatModel:
-    def __init__(self, client: OpenAI, model_name: str, brand: str):
-        self.client = client
-        self.model_name = model_name
-        self.brand = brand
+def build_chain(model_name: str, brand: str):
+    chat = ChatOpenAI(
+        model=model_name,
+        temperature=0,
+        timeout=15,
+    )
 
-    def reply(
-        self,
-        user_message: str,
-        faq_context: str,
-        order_context: str | None,
-        history: List[Dict[str, str]],
-    ) -> Tuple[str, Dict[str, int]]:
-        messages = [
-            {"role": "system", "content": SYSTEM_TEMPLATE.format(brand=self.brand)},
-            {"role": "system", "content": faq_context},
-        ]
-        if order_context:
-            messages.append({"role": "system", "content": order_context})
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_TEMPLATE.format(brand=brand)),
+        ("system", "{context}"),
+        MessagesPlaceholder("history"),
+        ("human", "{question}"),
+    ])
 
-        messages.extend(history[-10:])
-        messages.append({"role": "user", "content": user_message})
+    chain = prompt | chat
 
-        resp = self.client.chat.completions.create(
-            model=self.model_name,
-            messages=messages,
-        )
+    store: Dict[str, InMemoryChatMessageHistory] = {}
 
-        msg = resp.choices[0].message
-        usage = resp.usage
-        usage_dict = {
-            "prompt_tokens": usage.prompt_tokens,
-            "completion_tokens": usage.completion_tokens,
-            "total_tokens": usage.total_tokens,
-        }
-        return msg.content.strip(), usage_dict
+    def get_history(session_id: str):
+        if session_id not in store:
+            store[session_id] = InMemoryChatMessageHistory()
+        return store[session_id]
+
+    chain_with_history = RunnableWithMessageHistory(
+        chain,
+        get_history,
+        input_messages_key="question",
+        history_messages_key="history",
+    )
+
+    return chain_with_history, get_history

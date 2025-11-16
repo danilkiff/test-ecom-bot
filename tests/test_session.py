@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: CC0-1.0
 
 from pathlib import Path
-from shoply_bot.session import SessionState
+from shoply_bot.session import SessionState, JsonlLogger
 
 
 def test_usage_totals_accumulate(tmp_path: Path):
@@ -10,7 +10,7 @@ def test_usage_totals_accumulate(tmp_path: Path):
         session_id="test",
         brand="Shoply",
         model="gpt-4o-mini",
-        log_path=log_path,
+        logger=JsonlLogger(log_path),
     )
 
     state.log_usage_step({"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15})

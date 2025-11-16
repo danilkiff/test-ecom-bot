@@ -9,7 +9,18 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 
-@dataclass
+class JsonlLogger:
+    def __init__(self, path: Path):
+        self._file = path.open("a", encoding="utf-8")
+
+    def write(self, obj: Dict[str, Any]):
+        self._file.write(json.dumps(obj, ensure_ascii=False) + "\n")
+        self._file.flush()
+
+    def close(self):
+        self._file.close()
+
+
 class UsageTotals:
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -26,12 +37,12 @@ class SessionState:
     session_id: str
     brand: str
     model: str
-    log_path: Path
+    logger: JsonlLogger
     history: List[Dict[str, str]] = field(default_factory=list)
     last_order_context: Optional[str] = None
     usage_totals: UsageTotals = field(default_factory=UsageTotals)
 
-    def log_event(self, role: str, content: str, usage: Dict[str, Any] | None = None, extra: Dict[str, Any] | None = None):
+    def log_event(self, role: str, content: str, usage: Dict[str, Any] | None = None, **extra):
         event = {
             "type": "message",
             "timestamp": datetime.now(UTC).isoformat(),
@@ -43,19 +54,16 @@ class SessionState:
         if extra:
             event.update(extra)
 
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        self.logger.write(event)
 
     def init_meta(self):
-        meta = {
+        self.logger.write({
             "type": "meta",
             "timestamp": datetime.now(UTC).isoformat(),
             "session_id": self.session_id,
             "brand": self.brand,
             "model": self.model,
-        }
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(meta, ensure_ascii=False) + "\n")
+        })
 
     def add_history(self, role: str, content: str):
         self.history.append({"role": role, "content": content})
@@ -65,7 +73,7 @@ class SessionState:
         self.usage_totals.add_step(usage)
 
     def log_usage_summary(self):
-        summary = {
+        self.logger.write({
             "type": "usage_summary",
             "timestamp": datetime.now(UTC).isoformat(),
             "usage": {
@@ -73,6 +81,5 @@ class SessionState:
                 "completion_tokens": self.usage_totals.completion_tokens,
                 "total_tokens": self.usage_totals.total_tokens,
             },
-        }
-        with self.log_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(summary, ensure_ascii=False) + "\n")
+        })
+        self.logger.close()
