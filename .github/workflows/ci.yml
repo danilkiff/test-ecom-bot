@@ -27,4 +27,4 @@ jobs:
         env:
           OPENAI_API_KEY: dummy
         run: |
-          pytest -q
+          pytest --cov=shoply_bot --quiet
